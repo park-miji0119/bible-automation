@@ -36,10 +36,13 @@ for _stream in (sys.stdout, sys.stderr):
 
 
 def sanitize_text(text: str) -> str:
+    # Claude 출력에 간혹 섞이는 U+2028 / U+2029 / U+FEFF 만 정상 개행·제거로 치환.
+    # 일반 공백(0x20)은 절대 건드리지 않는다 — 과거 invisible char 이 공백으로 바뀌어
+    # 단어 사이마다 줄바꿈이 들어가는 사고가 있었음. 앞으로는 \u escape 로 고정.
     return (
-        text.replace(" ", "\n")
-            .replace(" ", "\n\n")
-            .replace("﻿", "")
+        text.replace("\u2028", "\n")
+            .replace("\u2029", "\n\n")
+            .replace("\ufeff", "")
     )
 
 
