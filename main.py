@@ -15,10 +15,9 @@ import re
 import smtplib
 import sys
 from datetime import datetime, timezone, timedelta
-from email.mime.base import MIMEBase
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email import encoders
 from pathlib import Path
 
 from anthropic import Anthropic
@@ -129,11 +128,19 @@ def send_email(docx_path: Path, topic: str, narrator: str, scenario: str) -> Non
     )
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
-    with docx_path.open("rb") as f:
-        part = MIMEBase("application", "vnd.openxmlformats-officedocument.wordprocessingml.document")
-        part.set_payload(f.read())
-    encoders.encode_base64(part)
-    part.add_header("Content-Disposition", f'attachment; filename="{docx_path.name}"')
+    data = docx_path.read_bytes()
+    part = MIMEApplication(
+        data,
+        _subtype="vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    # Naver webmail picks the extension from the plain `filename=` parameter.
+    # If that value is non-ASCII it gets dropped/encoded and the extension is
+    # lost, so attachments land as .txt. We build an ASCII-safe filename that
+    # ends in .docx and use RFC 2231 for the pretty Korean name alongside it.
+    ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "_", docx_path.stem).strip("_") or "scenario"
+    ascii_name = f"{ascii_name}.docx"
+    part.set_param("name", ascii_name)
+    part.add_header("Content-Disposition", "attachment", filename=ascii_name)
     msg.attach(part)
 
     with smtplib.SMTP_SSL("smtp.naver.com", 465, timeout=30) as smtp:
