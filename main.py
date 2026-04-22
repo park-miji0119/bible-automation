@@ -15,14 +15,12 @@ import re
 import smtplib
 import sys
 from datetime import datetime, timezone, timedelta
-from email.mime.application import MIMEApplication
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+from email.message import EmailMessage
 from pathlib import Path
 
 from anthropic import Anthropic
 from docx import Document
-from docx.shared import Pt
+from docx.shared import Pt, RGBColor
 
 from prompt_template import SYSTEM_PROMPT, build_prompt
 from topics import get_topic_for_week
@@ -38,16 +36,14 @@ for _stream in (sys.stdout, sys.stderr):
 
 
 def sanitize_text(text: str) -> str:
-    # Claude 가 간혹 섞는 LINE/PARAGRAPH SEPARATOR 와 BOM 을 일반 개행·공백으로 치환
     return (
-        text.replace(" ", "\n")
-            .replace(" ", "\n\n")
+        text.replace(" ", "\n")
+            .replace(" ", "\n\n")
             .replace("﻿", "")
     )
 
 
 def current_week_index() -> int:
-    """KST 기준 ISO 주차 + 연도로 오프셋을 섞어 반환."""
     now = datetime.now(KST)
     iso_year, iso_week, _ = now.isocalendar()
     base = iso_year * 53 + iso_week
@@ -59,7 +55,7 @@ def generate_scenario(topic: str, narrator: str, reference: str) -> str:
     client = Anthropic()
     message = client.messages.create(
         model=MODEL,
-        max_tokens=8000,
+        max_tokens=12000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": build_prompt(topic, narrator, reference)}],
     )
@@ -69,6 +65,32 @@ def generate_scenario(topic: str, narrator: str, reference: str) -> str:
 
 def safe_filename(value: str) -> str:
     return re.sub(r"[^\w\-._ ]", "_", value).strip()[:60] or "scenario"
+
+
+_SCENE_PATTERN = re.compile(r"^\[(?:장면|Scene)\s*:", re.IGNORECASE)
+_DIALOG_PATTERN = re.compile(r'^["“].+["”]\s*$')
+
+
+def _render_paragraph(doc: Document, line: str) -> None:
+    stripped = line.strip()
+    if not stripped:
+        doc.add_paragraph()
+        return
+
+    if _SCENE_PATTERN.match(stripped):
+        p = doc.add_paragraph()
+        run = p.add_run(stripped)
+        run.italic = True
+        run.font.color.rgb = RGBColor(0x55, 0x6B, 0x8D)
+        return
+
+    if _DIALOG_PATTERN.match(stripped):
+        p = doc.add_paragraph()
+        run = p.add_run(stripped)
+        run.bold = True
+        return
+
+    doc.add_paragraph(line)
 
 
 def save_docx(scenario: str, topic: str, narrator: str, reference: str, out_dir: Path) -> Path:
@@ -95,8 +117,10 @@ def save_docx(scenario: str, topic: str, narrator: str, reference: str, out_dir:
             doc.add_heading(stripped[3:], level=2)
         elif stripped.startswith("### "):
             doc.add_heading(stripped[4:], level=3)
+        elif stripped == "---":
+            doc.add_paragraph().add_run("─" * 40)
         else:
-            doc.add_paragraph(line)
+            _render_paragraph(doc, line)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     filename = f"{today_kst}_{safe_filename(topic)}.docx"
@@ -105,12 +129,24 @@ def save_docx(scenario: str, topic: str, narrator: str, reference: str, out_dir:
     return path
 
 
+def _attachment_name(docx_path: Path) -> str:
+    today_kst = datetime.now(KST).strftime("%Y-%m-%d")
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", docx_path.stem).strip("_")
+    if slug and slug != today_kst:
+        base = slug
+    else:
+        base = f"{today_kst}_bible_scenario"
+    if not base.lower().endswith(".docx"):
+        base += ".docx"
+    return base
+
+
 def send_email(docx_path: Path, topic: str, narrator: str, scenario: str) -> None:
     sender = os.environ["NAVER_EMAIL"]
     password = os.environ["NAVER_APP_PASSWORD"]
     recipient = os.environ.get("MAIL_RECIPIENT", sender)
 
-    msg = MIMEMultipart()
+    msg = EmailMessage()
     msg["From"] = sender
     msg["To"] = recipient
     today_kst = datetime.now(KST).strftime("%Y-%m-%d")
@@ -126,22 +162,15 @@ def send_email(docx_path: Path, topic: str, narrator: str, scenario: str) -> Non
         f"전체 내용은 첨부된 워드 파일을 확인해 주세요.\n"
         f"— Bible Automation"
     )
-    msg.attach(MIMEText(body, "plain", "utf-8"))
+    msg.set_content(body)
 
-    data = docx_path.read_bytes()
-    part = MIMEApplication(
-        data,
-        _subtype="vnd.openxmlformats-officedocument.wordprocessingml.document",
+    attach_name = _attachment_name(docx_path)
+    msg.add_attachment(
+        docx_path.read_bytes(),
+        maintype="application",
+        subtype="vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=attach_name,
     )
-    # Naver webmail picks the extension from the plain `filename=` parameter.
-    # If that value is non-ASCII it gets dropped/encoded and the extension is
-    # lost, so attachments land as .txt. We build an ASCII-safe filename that
-    # ends in .docx and use RFC 2231 for the pretty Korean name alongside it.
-    ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "_", docx_path.stem).strip("_") or "scenario"
-    ascii_name = f"{ascii_name}.docx"
-    part.set_param("name", ascii_name)
-    part.add_header("Content-Disposition", "attachment", filename=ascii_name)
-    msg.attach(part)
 
     with smtplib.SMTP_SSL("smtp.naver.com", 465, timeout=30) as smtp:
         smtp.login(sender, password)
