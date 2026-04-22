@@ -6,6 +6,8 @@
     NAVER_APP_PASSWORD - 네이버 메일 SMTP 앱 비밀번호
     MAIL_RECIPIENT     - 수신자 (미지정 시 NAVER_EMAIL 로 발송)
     WEEK_OFFSET        - (선택) 주제 순환 오프셋 정수
+    TOPIC_IDS          - (선택) 1-indexed 번호 목록. 쉼표/공백 구분. 예: "1,5,10"
+                          지정 시 주차 자동 선정 대신 해당 번호(들)의 주제만 생성·발송.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from docx import Document
 from docx.shared import Pt, RGBColor
 
 from prompt_template import SYSTEM_PROMPT, build_prompt
-from topics import get_topic_for_week
+from topics import TOPICS, get_topic_for_week
 
 MODEL = "claude-opus-4-5"
 KST = timezone(timedelta(hours=9))
@@ -180,20 +182,54 @@ def send_email(docx_path: Path, topic: str, narrator: str, scenario: str) -> Non
         smtp.send_message(msg)
 
 
+def parse_topic_ids(raw: str) -> list[int]:
+    """쉼표/공백 구분 1-indexed 번호를 0-indexed 리스트로 변환. 범위 밖은 무시."""
+    ids: list[int] = []
+    for tok in re.split(r"[\s,]+", raw.strip()):
+        if not tok:
+            continue
+        try:
+            n = int(tok)
+        except ValueError:
+            print(f"  skip non-integer token: {tok!r}")
+            continue
+        if 1 <= n <= len(TOPICS):
+            ids.append(n - 1)
+        else:
+            print(f"  skip out-of-range id: {n} (valid 1..{len(TOPICS)})")
+    return ids
+
+
+def run_one(topic: str, narrator: str, reference: str, out_dir: Path) -> None:
+    print(f"  topic={topic} / narrator={narrator} / ref={reference}")
+    scenario = generate_scenario(topic, narrator, reference)
+    print(f"  scenario generated: {len(scenario)} chars")
+    docx_path = save_docx(scenario, topic, narrator, reference, out_dir)
+    print(f"  saved: {docx_path}")
+    send_email(docx_path, topic, narrator, scenario)
+    print("  email sent.")
+
+
 def main() -> int:
+    out_dir = Path(__file__).parent / "output"
+
+    raw_ids = os.environ.get("TOPIC_IDS", "").strip()
+    if raw_ids:
+        ids = parse_topic_ids(raw_ids)
+        if not ids:
+            print(f"TOPIC_IDS set ({raw_ids!r}) but yielded no valid ids; aborting.")
+            return 1
+        print(f"[manual] topic_ids (1-indexed) -> resolving {len(ids)} entr{'y' if len(ids)==1 else 'ies'}")
+        for idx in ids:
+            topic, narrator, reference = TOPICS[idx]
+            print(f"[#{idx + 1}]")
+            run_one(topic, narrator, reference, out_dir)
+        return 0
+
     week_index = current_week_index()
     topic, narrator, reference = get_topic_for_week(week_index)
-    print(f"[week={week_index}] topic={topic} / narrator={narrator} / ref={reference}")
-
-    scenario = generate_scenario(topic, narrator, reference)
-    print(f"Scenario generated: {len(scenario)} chars")
-
-    out_dir = Path(__file__).parent / "output"
-    docx_path = save_docx(scenario, topic, narrator, reference, out_dir)
-    print(f"Saved: {docx_path}")
-
-    send_email(docx_path, topic, narrator, scenario)
-    print("Email sent successfully.")
+    print(f"[weekly] week={week_index}")
+    run_one(topic, narrator, reference, out_dir)
     return 0
 
 

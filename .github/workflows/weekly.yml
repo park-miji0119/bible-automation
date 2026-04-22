@@ -5,6 +5,12 @@ on:
     # 매주 토요일 13:00 KST = 토요일 04:00 UTC
     - cron: "0 4 * * 6"
   workflow_dispatch:
+    inputs:
+      topic_ids:
+        description: "주제 번호 (1-indexed, 쉼표 또는 공백 구분, 예: 1,5,10). 비워두면 이번 주차 자동 선정."
+        required: false
+        default: ""
+        type: string
 
 jobs:
   generate-and-send:
@@ -32,6 +38,7 @@ jobs:
           NAVER_EMAIL: ${{ secrets.NAVER_EMAIL }}
           NAVER_APP_PASSWORD: ${{ secrets.NAVER_APP_PASSWORD }}
           MAIL_RECIPIENT: ${{ secrets.MAIL_RECIPIENT }}
+          TOPIC_IDS: ${{ inputs.topic_ids }}
           PYTHONIOENCODING: utf-8
           PYTHONUTF8: "1"
           LANG: C.UTF-8
