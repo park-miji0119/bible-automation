@@ -31,6 +31,21 @@ from topics import get_topic_for_week
 MODEL = "claude-opus-4-5"
 KST = timezone(timedelta(hours=9))
 
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
+
+def sanitize_text(text: str) -> str:
+    # Claude 가 간혹 섞는 LINE/PARAGRAPH SEPARATOR 와 BOM 을 일반 개행·공백으로 치환
+    return (
+        text.replace(" ", "\n")
+            .replace(" ", "\n\n")
+            .replace("﻿", "")
+    )
+
 
 def current_week_index() -> int:
     """KST 기준 ISO 주차 + 연도로 오프셋을 섞어 반환."""
@@ -49,7 +64,8 @@ def generate_scenario(topic: str, narrator: str, reference: str) -> str:
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": build_prompt(topic, narrator, reference)}],
     )
-    return "".join(block.text for block in message.content if block.type == "text")
+    raw = "".join(block.text for block in message.content if block.type == "text")
+    return sanitize_text(raw)
 
 
 def safe_filename(value: str) -> str:
@@ -122,7 +138,7 @@ def send_email(docx_path: Path, topic: str, narrator: str, scenario: str) -> Non
 
     with smtplib.SMTP_SSL("smtp.naver.com", 465, timeout=30) as smtp:
         smtp.login(sender, password)
-        smtp.sendmail(sender, [recipient], msg.as_string())
+        smtp.send_message(msg)
 
 
 def main() -> int:

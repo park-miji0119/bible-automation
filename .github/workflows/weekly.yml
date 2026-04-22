@@ -32,6 +32,10 @@ jobs:
           NAVER_EMAIL: ${{ secrets.NAVER_EMAIL }}
           NAVER_APP_PASSWORD: ${{ secrets.NAVER_APP_PASSWORD }}
           MAIL_RECIPIENT: ${{ secrets.MAIL_RECIPIENT }}
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
         run: python main.py
 
       - name: Upload generated docx as artifact
