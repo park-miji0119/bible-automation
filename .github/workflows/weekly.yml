@@ -1,0 +1,44 @@
+name: Weekly Bible Scenario
+
+on:
+  schedule:
+    # 매주 토요일 13:00 KST = 토요일 04:00 UTC
+    - cron: "0 4 * * 6"
+  workflow_dispatch:
+
+jobs:
+  generate-and-send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generate scenario and send email
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NAVER_EMAIL: ${{ secrets.NAVER_EMAIL }}
+          NAVER_APP_PASSWORD: ${{ secrets.NAVER_APP_PASSWORD }}
+          MAIL_RECIPIENT: ${{ secrets.MAIL_RECIPIENT }}
+        run: python main.py
+
+      - name: Upload generated docx as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bible-scenario-${{ github.run_number }}
+          path: output/*.docx
+          if-no-files-found: ignore
+          retention-days: 30
